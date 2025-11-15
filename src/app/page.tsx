@@ -84,11 +84,22 @@ export default function ImpostorGame() {
   };
 
   const saveRoom = (room: Room) => {
-    localStorage.setItem(`room_${room.code}`, JSON.stringify(room));
+    // Salva a sala com o código em maiúsculas
+    const upperCode = room.code.toUpperCase();
+    localStorage.setItem(`room_${upperCode}`, JSON.stringify(room));
+    
+    // Também adiciona o código à lista de salas ativas
+    const activeSalas = JSON.parse(localStorage.getItem("activeSalas") || "[]");
+    if (!activeSalas.includes(upperCode)) {
+      activeSalas.push(upperCode);
+      localStorage.setItem("activeSalas", JSON.stringify(activeSalas));
+    }
   };
 
   const loadRoom = (code: string): Room | null => {
-    const data = localStorage.getItem(`room_${code}`);
+    // Sempre busca com código em maiúsculas
+    const upperCode = code.toUpperCase();
+    const data = localStorage.getItem(`room_${upperCode}`);
     return data ? JSON.parse(data) : null;
   };
 
@@ -108,7 +119,7 @@ export default function ImpostorGame() {
     };
 
     const room: Room = {
-      code,
+      code: code.toUpperCase(),
       players: [player],
       word: null,
       gameStarted: false,
@@ -120,8 +131,8 @@ export default function ImpostorGame() {
     saveRoom(room);
     setCurrentRoom(room);
     setCurrentPlayer(player);
-    setRoomCode(code);
-    localStorage.setItem("currentRoomCode", code);
+    setRoomCode(code.toUpperCase());
+    localStorage.setItem("currentRoomCode", code.toUpperCase());
     localStorage.setItem("currentPlayerId", playerId);
     setScreen("lobby");
   };
@@ -129,9 +140,11 @@ export default function ImpostorGame() {
   const joinRoom = () => {
     if (!playerName.trim() || !roomCode.trim()) return;
 
-    const room = loadRoom(roomCode.toUpperCase());
+    const upperRoomCode = roomCode.toUpperCase();
+    const room = loadRoom(upperRoomCode);
+    
     if (!room) {
-      alert("Sala não encontrada!");
+      alert("Sala não encontrada! Verifique o código e tente novamente.");
       return;
     }
 
