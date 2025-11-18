@@ -5,6 +5,7 @@ import { Users, Play, LogIn, Crown, Eye, Vote, Trophy, AlertCircle } from "lucid
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { supabase } from "@/lib/supabase";
 
 // Types
 type Player = {
@@ -41,19 +42,20 @@ export default function ImpostorGame() {
     const savedPlayerId = localStorage.getItem("currentPlayerId");
     
     if (savedRoomCode && savedPlayerId) {
-      const room = loadRoom(savedRoomCode);
-      if (room) {
-        const player = room.players.find(p => p.id === savedPlayerId);
-        if (player) {
-          setCurrentRoom(room);
-          setCurrentPlayer(player);
-          if (room.gameStarted) {
-            setScreen("game");
-          } else {
-            setScreen("lobby");
+      loadRoom(savedRoomCode).then(room => {
+        if (room) {
+          const player = room.players.find(p => p.id === savedPlayerId);
+          if (player) {
+            setCurrentRoom(room);
+            setCurrentPlayer(player);
+            if (room.gameStarted) {
+              setScreen("game");
+            } else {
+              setScreen("lobby");
+            }
           }
         }
-      }
+      });
     }
   }, []);
 
@@ -61,15 +63,16 @@ export default function ImpostorGame() {
   useEffect(() => {
     if (currentRoom && screen !== "home") {
       const interval = setInterval(() => {
-        const room = loadRoom(currentRoom.code);
-        if (room) {
-          setCurrentRoom(room);
-          const player = room.players.find(p => p.id === currentPlayer?.id);
-          if (player) {
-            setCurrentPlayer(player);
+        loadRoom(currentRoom.code).then(room => {
+          if (room) {
+            setCurrentRoom(room);
+            const player = room.players.find(p => p.id === currentPlayer?.id);
+            if (player) {
+              setCurrentPlayer(player);
+            }
           }
-        }
-      }, 1000);
+        });
+      }, 2000);
       return () => clearInterval(interval);
     }
   }, [currentRoom, currentPlayer, screen]);
@@ -83,27 +86,92 @@ export default function ImpostorGame() {
     return Math.random().toString(36).substring(2, 15);
   };
 
-  const saveRoom = (room: Room) => {
-    // Salva a sala com o código em maiúsculas
+  const saveRoom = async (room: Room) => {
     const upperCode = room.code.toUpperCase();
-    localStorage.setItem(`room_${upperCode}`, JSON.stringify(room));
     
-    // Também adiciona o código à lista de salas ativas
-    const activeSalas = JSON.parse(localStorage.getItem("activeSalas") || "[]");
-    if (!activeSalas.includes(upperCode)) {
-      activeSalas.push(upperCode);
-      localStorage.setItem("activeSalas", JSON.stringify(activeSalas));
+    // Salvar sala
+    const { error: roomError } = await supabase
+      .from('rooms')
+      .upsert({
+        code: upperCode,
+        word: room.word,
+        game_started: room.gameStarted,
+        voting_phase: room.votingPhase,
+        game_ended: room.gameEnded,
+        winner: room.winner,
+        updated_at: new Date().toISOString()
+      });
+
+    if (roomError) {
+      console.error('Erro ao salvar sala:', roomError);
+      return;
+    }
+
+    // Salvar jogadores
+    for (const player of room.players) {
+      const { error: playerError } = await supabase
+        .from('players')
+        .upsert({
+          id: player.id,
+          room_code: upperCode,
+          name: player.name,
+          is_leader: player.isLeader,
+          is_impostor: player.isImpostor,
+          has_voted: player.hasVoted,
+          voted_for: player.votedFor
+        });
+
+      if (playerError) {
+        console.error('Erro ao salvar jogador:', playerError);
+      }
     }
   };
 
-  const loadRoom = (code: string): Room | null => {
-    // Sempre busca com código em maiúsculas
+  const loadRoom = async (code: string): Promise<Room | null> => {
     const upperCode = code.toUpperCase();
-    const data = localStorage.getItem(`room_${upperCode}`);
-    return data ? JSON.parse(data) : null;
+    
+    // Buscar sala
+    const { data: roomData, error: roomError } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('code', upperCode)
+      .single();
+
+    if (roomError || !roomData) {
+      return null;
+    }
+
+    // Buscar jogadores
+    const { data: playersData, error: playersError } = await supabase
+      .from('players')
+      .select('*')
+      .eq('room_code', upperCode);
+
+    if (playersError) {
+      return null;
+    }
+
+    const players: Player[] = playersData.map(p => ({
+      id: p.id,
+      name: p.name,
+      isLeader: p.is_leader,
+      isImpostor: p.is_impostor,
+      hasVoted: p.has_voted,
+      votedFor: p.voted_for
+    }));
+
+    return {
+      code: roomData.code,
+      word: roomData.word,
+      gameStarted: roomData.game_started,
+      votingPhase: roomData.voting_phase,
+      gameEnded: roomData.game_ended,
+      winner: roomData.winner,
+      players
+    };
   };
 
-  const createRoom = () => {
+  const createRoom = async () => {
     if (!playerName.trim()) return;
 
     const code = generateRoomCode();
@@ -128,7 +196,7 @@ export default function ImpostorGame() {
       winner: null,
     };
 
-    saveRoom(room);
+    await saveRoom(room);
     setCurrentRoom(room);
     setCurrentPlayer(player);
     setRoomCode(code.toUpperCase());
@@ -137,11 +205,11 @@ export default function ImpostorGame() {
     setScreen("lobby");
   };
 
-  const joinRoom = () => {
+  const joinRoom = async () => {
     if (!playerName.trim() || !roomCode.trim()) return;
 
     const upperRoomCode = roomCode.toUpperCase();
-    const room = loadRoom(upperRoomCode);
+    const room = await loadRoom(upperRoomCode);
     
     if (!room) {
       alert("Sala não encontrada! Verifique o código e tente novamente.");
@@ -164,7 +232,7 @@ export default function ImpostorGame() {
     };
 
     room.players.push(player);
-    saveRoom(room);
+    await saveRoom(room);
     setCurrentRoom(room);
     setCurrentPlayer(player);
     localStorage.setItem("currentRoomCode", room.code);
@@ -172,7 +240,7 @@ export default function ImpostorGame() {
     setScreen("lobby");
   };
 
-  const startGame = () => {
+  const startGame = async () => {
     if (!currentRoom || !secretWord.trim()) return;
     if (currentRoom.players.length < 4) {
       alert("Mínimo de 4 jogadores necessário!");
@@ -193,7 +261,7 @@ export default function ImpostorGame() {
       gameStarted: true,
     };
 
-    saveRoom(updatedRoom);
+    await saveRoom(updatedRoom);
     setCurrentRoom(updatedRoom);
     
     const player = updatedPlayers.find(p => p.id === currentPlayer?.id);
@@ -204,7 +272,7 @@ export default function ImpostorGame() {
     setScreen("game");
   };
 
-  const startVoting = () => {
+  const startVoting = async () => {
     if (!currentRoom || !currentPlayer?.isLeader) return;
 
     const updatedRoom: Room = {
@@ -212,11 +280,11 @@ export default function ImpostorGame() {
       votingPhase: true,
     };
 
-    saveRoom(updatedRoom);
+    await saveRoom(updatedRoom);
     setCurrentRoom(updatedRoom);
   };
 
-  const votePlayer = (targetId: string) => {
+  const votePlayer = async (targetId: string) => {
     if (!currentRoom || !currentPlayer || currentPlayer.hasVoted) return;
 
     const updatedPlayers = currentRoom.players.map(p => 
@@ -230,7 +298,7 @@ export default function ImpostorGame() {
       players: updatedPlayers,
     };
 
-    saveRoom(updatedRoom);
+    await saveRoom(updatedRoom);
     setCurrentRoom(updatedRoom);
     setCurrentPlayer({ ...currentPlayer, hasVoted: true, votedFor: targetId });
 
@@ -240,7 +308,7 @@ export default function ImpostorGame() {
     }
   };
 
-  const calculateWinner = (room: Room) => {
+  const calculateWinner = async (room: Room) => {
     const votes: { [key: string]: number } = {};
     
     room.players.forEach(player => {
@@ -261,7 +329,7 @@ export default function ImpostorGame() {
       winner,
     };
 
-    saveRoom(updatedRoom);
+    await saveRoom(updatedRoom);
     setCurrentRoom(updatedRoom);
   };
 
@@ -277,7 +345,7 @@ export default function ImpostorGame() {
     setScreen("home");
   };
 
-  const resetGame = () => {
+  const resetGame = async () => {
     if (!currentRoom || !currentPlayer?.isLeader) return;
 
     const resetPlayers = currentRoom.players.map(p => ({
@@ -297,7 +365,7 @@ export default function ImpostorGame() {
       winner: null,
     };
 
-    saveRoom(updatedRoom);
+    await saveRoom(updatedRoom);
     setCurrentRoom(updatedRoom);
     setSecretWord("");
     setShowWord(false);
